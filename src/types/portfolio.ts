@@ -106,8 +106,8 @@ export interface ThemeSettings {
 }
 
 export interface SecuritySettings {
-  authorizedEmails: string[];
-  masterPin: string;
+  // Note: authorizedEmails and masterPin are now environment variables (VITE_ADMIN_EMAIL / VITE_ADMIN_PIN)
+  // and are NOT stored here to prevent exposure via localStorage or DevTools.
   hideAdminButton: boolean;
 }
 

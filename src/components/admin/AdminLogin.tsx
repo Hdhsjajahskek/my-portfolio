@@ -1,59 +1,157 @@
 import React, { useState } from 'react';
-import { 
-  ShieldCheck, 
-  Mail, 
-  KeyRound, 
-  Lock, 
-  AlertTriangle, 
-  CheckCircle2, 
-  ShieldAlert 
+import {
+  ShieldCheck,
+  KeyRound,
+  Lock,
+  AlertTriangle,
+  CheckCircle2,
+  ShieldAlert,
+  ArrowRight,
+  Loader2,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { usePortfolio } from '../../context/PortfolioContext';
 import { soundFx } from '../../utils/audio';
 
+type Step = 'google' | 'pin' | 'error_email';
+
 export const AdminLogin: React.FC = () => {
-  const { loginWithGoogle } = useAuth();
+  const { startGoogleLogin, verifyPin, finalizeLogin, pendingFirebaseUser } = useAuth();
   const { data } = usePortfolio();
 
-  const [googleEmail, setGoogleEmail] = useState('');
-  const [securityPin, setSecurityPin] = useState('');
+  const [step, setStep] = useState<Step>('google');
+  const [pinInput, setPinInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [pinError, setPinError] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  const authorizedList = data.security?.authorizedEmails || ['admin.creator@gmail.com'];
-  const masterPin = data.security?.masterPin || '8844';
-
-  const handleGoogleAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // ── Step 1: Trigger real Google sign-in popup ──────────────────
+  const handleGoogleSignIn = async () => {
     setAuthError(null);
     setLoading(true);
     soundFx.playClick();
 
-    setTimeout(async () => {
-      const emailNormalized = googleEmail.trim().toLowerCase();
-      const pinTrimmed = securityPin.trim();
+    const result = await startGoogleLogin();
+    setLoading(false);
 
-      // Check if email matches owner whitelist OR if valid master security PIN is provided
-      const isEmailAuthorized = authorizedList.some(
-        em => em.trim().toLowerCase() === emailNormalized
-      );
-      const isPinAuthorized = pinTrimmed === masterPin;
-
-      if (isEmailAuthorized || isPinAuthorized) {
-        await loginWithGoogle(
-          emailNormalized || authorizedList[0] || 'owner@portfolio.com',
-          data.profile.name + ' (Owner)'
-        );
-        setLoading(false);
-      } else {
-        soundFx.playClick();
-        setAuthError('Access Denied: This Google account or PIN is not authorized. Only the verified portfolio owner can access the admin studio.');
-        setLoading(false);
-      }
-    }, 600);
+    if (result === 'email_ok') {
+      // Google verified — move to PIN step
+      setStep('pin');
+    } else if (result === 'unauthorized_email') {
+      setStep('error_email');
+    } else {
+      // Popup closed or network error — stay on google step
+      setAuthError('Sign-in was cancelled or failed. Please try again.');
+    }
   };
 
+  // ── Step 2: Verify the owner PIN ──────────────────────────────
+  const handlePinSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setPinError(false);
+
+    if (verifyPin(pinInput)) {
+      finalizeLogin();
+    } else {
+      soundFx.playClick();
+      setPinError(true);
+      setPinInput('');
+    }
+  };
+
+  // ── Wrong account screen ───────────────────────────────────────
+  if (step === 'error_email') {
+    return (
+      <div className="flex flex-col items-center justify-center p-6 sm:p-12 text-center max-w-lg mx-auto">
+        <div className="w-16 h-16 rounded-2xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center mb-6">
+          <ShieldAlert className="w-8 h-8 text-rose-400" />
+        </div>
+        <h2 className="text-2xl font-extrabold font-heading text-white">Access Denied</h2>
+        <p className="text-sm text-slate-400 mt-2 mb-6 leading-relaxed">
+          The Google account you signed in with is <span className="text-rose-400 font-semibold">not authorized</span> to access this admin panel.
+          Only the verified portfolio owner's account can log in.
+        </p>
+        <div className="w-full p-4 mb-6 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-mono text-left">
+          <p>↳ Wrong Google account selected.</p>
+          <p className="mt-1 text-rose-400/70">You have been signed out of Google automatically.</p>
+        </div>
+        <button
+          onClick={() => { setStep('google'); setAuthError(null); }}
+          className="px-6 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-sm font-bold transition"
+        >
+          Try a different account
+        </button>
+      </div>
+    );
+  }
+
+  // ── PIN verification screen ────────────────────────────────────
+  if (step === 'pin') {
+    return (
+      <div className="flex flex-col items-center justify-center p-6 sm:p-12 text-center max-w-lg mx-auto">
+        {/* Verified Google badge */}
+        <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-emerald-400 shadow-[0_0_20px_rgba(52,211,153,0.3)] mb-4">
+          {pendingFirebaseUser?.photoURL ? (
+            <img src={pendingFirebaseUser.photoURL} alt="Your Google avatar" className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full bg-emerald-900 flex items-center justify-center">
+              <CheckCircle2 className="w-8 h-8 text-emerald-400" />
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5 text-xs font-mono text-emerald-400 mb-1">
+          <CheckCircle2 className="w-3.5 h-3.5" />
+          <span>Google Identity Verified</span>
+        </div>
+        <p className="text-xs text-slate-400 font-mono mb-6 truncate max-w-xs">{pendingFirebaseUser?.email}</p>
+
+        <h2 className="text-2xl font-extrabold font-heading text-white">Enter Owner PIN</h2>
+        <p className="text-xs text-slate-400 mt-1 mb-6">
+          One last step — enter your secret owner PIN to unlock the admin studio.
+        </p>
+
+        <form onSubmit={handlePinSubmit} className="w-full space-y-4">
+          <div className="relative">
+            <input
+              id="admin-pin-input"
+              type="password"
+              required
+              autoFocus
+              maxLength={32}
+              value={pinInput}
+              onChange={(e) => { setPinInput(e.target.value); setPinError(false); }}
+              placeholder="Enter your secret PIN"
+              className={`w-full bg-slate-950 border rounded-xl pl-10 pr-4 py-3 text-sm font-mono text-white tracking-widest focus:outline-none transition
+                ${pinError
+                  ? 'border-rose-500 focus:border-rose-400 shadow-[0_0_12px_rgba(239,68,68,0.3)]'
+                  : 'border-slate-700 focus:border-cyan-400 focus:shadow-[0_0_12px_rgba(6,182,212,0.2)]'
+                }`}
+            />
+            <KeyRound className="w-4 h-4 text-slate-500 absolute left-3 top-3.5" />
+          </div>
+
+          {pinError && (
+            <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs font-mono flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>Incorrect PIN. Access blocked.</span>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            className="w-full py-3.5 rounded-xl bg-gradient-to-r from-cyan-500 to-purple-600 hover:from-cyan-400 hover:to-purple-500 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(6,182,212,0.35)] transition transform active:scale-95"
+          >
+            <Lock className="w-4 h-4" />
+            <span>Unlock Admin Studio</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        </form>
+      </div>
+    );
+  }
+
+  // ── Step 1: Google sign-in screen ────────────────────────────
   return (
     <div className="flex flex-col items-center justify-center p-6 sm:p-12 text-center max-w-lg mx-auto">
       {/* Shield Icon */}
@@ -66,93 +164,58 @@ export const AdminLogin: React.FC = () => {
       <h2 className="text-2xl sm:text-3xl font-extrabold font-heading text-white">
         Owner-Only Admin Portal
       </h2>
-      <p className="text-xs sm:text-sm text-slate-400 mt-2 mb-6">
-        Protected by Owner Whitelist Verification & Master Security Key. Only authorized owners can enter.
+      <p className="text-xs sm:text-sm text-slate-400 mt-2 mb-8 leading-relaxed">
+        Protected by <span className="text-cyan-400 font-semibold">real Google OAuth</span> + a secret owner PIN.
+        Only the verified portfolio owner can enter — no exceptions.
       </p>
 
-      {/* Error Banner */}
+      {/* Security badges */}
+      <div className="w-full grid grid-cols-2 gap-3 mb-8">
+        {[
+          { icon: '🔐', label: 'Real Google OAuth', sub: 'Firebase verified' },
+          { icon: '🔑', label: 'Secret Owner PIN', sub: 'Never stored publicly' },
+        ].map((badge) => (
+          <div key={badge.label} className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 text-left">
+            <div className="text-lg mb-1">{badge.icon}</div>
+            <div className="text-xs font-bold text-white">{badge.label}</div>
+            <div className="text-[10px] text-slate-500 font-mono">{badge.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Error banner */}
       {authError && (
-        <div className="w-full p-4 mb-4 rounded-xl bg-rose-500/20 border border-rose-500/50 text-rose-300 text-xs font-mono text-left flex items-start gap-2.5 animate-in fade-in">
-          <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+        <div className="w-full p-3 mb-4 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-mono flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
           <span>{authError}</span>
         </div>
       )}
 
-      {/* Login Form */}
-      <form onSubmit={handleGoogleAuth} className="w-full space-y-4 text-left">
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
-          <div className="text-xs font-mono text-cyan-400 uppercase tracking-wider flex items-center justify-between">
-            <span className="flex items-center gap-1.5">
-              <Lock className="w-3.5 h-3.5" />
-              <span>Owner Authentication</span>
-            </span>
-            <span className="text-[10px] text-slate-500 font-mono">RESTRICTED</span>
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs text-slate-300 font-mono">Your Owner Gmail Address</label>
-            <div className="relative">
-              <input
-                type="email"
-                required
-                value={googleEmail}
-                onChange={(e) => setGoogleEmail(e.target.value)}
-                placeholder="e.g. yourname@gmail.com"
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-4 py-2.5 text-xs font-mono text-white focus:border-cyan-400 focus:outline-none"
-              />
-              <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <div className="flex items-center justify-between">
-              <label className="text-xs text-slate-300 font-mono">Master Security PIN (or default 8844)</label>
-              <span className="text-[10px] text-cyan-400 font-mono">Owner Key</span>
-            </div>
-            <div className="relative">
-              <input
-                type="password"
-                value={securityPin}
-                onChange={(e) => setSecurityPin(e.target.value)}
-                placeholder="Enter owner PIN (e.g. 8844)"
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-4 py-2.5 text-xs font-mono text-white focus:border-cyan-400 focus:outline-none tracking-widest"
-              />
-              <KeyRound className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
-            </div>
-          </div>
-        </div>
-
-        {/* Google Sign-In Button */}
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full py-3.5 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-950 font-bold text-xs sm:text-sm font-heading flex items-center justify-center gap-3 shadow-lg hover:shadow-xl transition transform active:scale-95 disabled:opacity-50"
-        >
-          <svg className="w-5 h-5" viewBox="0 0 24 24">
-            <path
-              fill="#4285F4"
-              d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.17z"
-            />
-            <path
-              fill="#34A853"
-              d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"
-            />
-            <path
-              fill="#FBBC05"
-              d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"
-            />
-            <path
-              fill="#EA4335"
-              d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
-            />
+      {/* Real Google sign-in button */}
+      <button
+        id="admin-google-signin-btn"
+        onClick={handleGoogleSignIn}
+        disabled={loading}
+        className="w-full py-3.5 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-950 font-bold text-sm flex items-center justify-center gap-3 shadow-lg hover:shadow-xl transition transform active:scale-95 disabled:opacity-60"
+      >
+        {loading ? (
+          <Loader2 className="w-5 h-5 animate-spin text-slate-600" />
+        ) : (
+          <svg className="w-5 h-5" viewBox="0 0 24 24" aria-hidden="true">
+            <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.17z" />
+            <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z" />
+            <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z" />
+            <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z" />
           </svg>
-          <span>{loading ? 'VERIFYING_OWNER_AUTHORIZATION...' : 'Sign in as Portfolio Owner'}</span>
-        </button>
-      </form>
+        )}
+        <span>{loading ? 'Opening Google Sign-In…' : 'Continue with Google'}</span>
+      </button>
 
       <div className="mt-6 flex items-center gap-2 text-[11px] font-mono text-slate-500">
         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-        <span>Unverified accounts cannot view or modify your data.</span>
+        <span>
+          {data.profile.name}'s portfolio — unauthorized accounts are immediately blocked &amp; signed out.
+        </span>
       </div>
     </div>
   );

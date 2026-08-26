@@ -296,8 +296,8 @@ export const initialPortfolioData: PortfolioData = {
     }
   ],
   security: {
-    authorizedEmails: ['admin.creator@gmail.com'],
-    masterPin: '8844',
+    // authorizedEmails and masterPin are configured via .env.local (VITE_ADMIN_EMAIL / VITE_ADMIN_PIN)
+    // and are never stored in data or localStorage.
     hideAdminButton: false
   }
 };

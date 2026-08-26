@@ -319,7 +319,11 @@ export const PortfolioProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const updateSecuritySettings = (secUpdate: Partial<SecuritySettings>) => {
     const updated: PortfolioData = {
       ...data,
-      security: { ...data.security, ...secUpdate }
+      security: {
+        // Only persist non-sensitive setting (hideAdminButton).
+        // Email and PIN are env vars — never stored here.
+        hideAdminButton: secUpdate.hideAdminButton ?? data.security?.hideAdminButton ?? false
+      }
     };
     persistAndBroadcast(updated);
     soundFx.playSuccess();
