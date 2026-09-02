@@ -1,4 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import {
+  collection,
+  onSnapshot,
+} from 'firebase/firestore';
 import { 
   X, 
   LayoutDashboard, 
@@ -11,8 +15,10 @@ import {
   LogOut, 
   ShieldCheck,
   Lock,
-  CheckCircle2
+  CheckCircle2,
+  Cloud
 } from 'lucide-react';
+import { db } from '../../lib/firebase';
 import { useAuth } from '../../context/AuthContext';
 import { usePortfolio } from '../../context/PortfolioContext';
 import { soundFx } from '../../utils/audio';
@@ -46,9 +52,23 @@ export const AdminModal: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [setIsAdminModalOpen]);
 
-  if (!isAdminModalOpen) return null;
+  // Real-time leads count via Firestore (leads stored in separate collection)
+  const [totalLeads, setTotalLeads] = useState(0);
+  const [newLeadsCount, setNewLeadsCount] = useState(0);
 
-  const newLeadsCount = (data.leads || []).filter(l => l.status === 'new').length;
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const unsub = onSnapshot(
+      collection(db, 'leads'),
+      (snap) => {
+        setTotalLeads(snap.size);
+        setNewLeadsCount(snap.docs.filter(d => d.data().status === 'new').length);
+      },
+      () => { /* permission error — not admin */ }
+    );
+    return () => unsub();
+  }, [isAuthenticated]);
+
 
   const tabs = [
     { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
@@ -60,6 +80,8 @@ export const AdminModal: React.FC = () => {
     { id: 'theme', label: '3D Scene & Theme', icon: Palette },
     { id: 'security', label: 'Owner Security', icon: Lock }
   ];
+
+  if (!isAdminModalOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-6 bg-slate-950/85 backdrop-blur-2xl animate-in fade-in duration-200">
@@ -176,18 +198,18 @@ export const AdminModal: React.FC = () => {
 
                     <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-1">
                       <div className="text-xs font-mono text-slate-400 uppercase">Incoming Inquiries</div>
-                      <div className="text-3xl font-extrabold font-heading text-emerald-400">{(data.leads || []).length}</div>
+                      <div className="text-3xl font-extrabold font-heading text-emerald-400">{totalLeads}</div>
                       <p className="text-[11px] text-slate-500 font-mono">{newLeadsCount} unread transmissions</p>
                     </div>
                   </div>
 
                   {/* Sync status card */}
                   <div className="p-5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-start gap-4">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                    <Cloud className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
                     <div className="space-y-1">
-                      <h4 className="font-bold text-sm text-emerald-300">Owner-Locked Real-Time Sync Active</h4>
+                      <h4 className="font-bold text-sm text-emerald-300">Firebase Firestore Real-Time Sync Active</h4>
                       <p className="text-xs text-emerald-400/80 leading-relaxed">
-                        Whenever you edit a project, price, or bio in this studio, changes are instantly transmitted across all open browser tabs and visitors without requiring page refreshes or code builds.
+                        All edits are saved to Firebase Firestore and instantly pushed to every visitor's browser worldwide — no page refreshes or code builds required.
                       </p>
                     </div>
                   </div>

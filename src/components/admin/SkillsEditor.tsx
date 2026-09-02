@@ -15,7 +15,7 @@ export const SkillsEditor: React.FC = () => {
     e.preventDefault();
     if (!newSkillName) return;
 
-    addSkill({
+    void addSkill({
       name: newSkillName,
       category: newSkillCategory,
       proficiency: newSkillProficiency,
@@ -105,7 +105,7 @@ export const SkillsEditor: React.FC = () => {
             <div className="flex items-center gap-2">
               <span className="text-xs font-mono text-slate-400">{skill.proficiency}%</span>
               <button
-                onClick={() => deleteSkill(skill.id)}
+                onClick={() => void deleteSkill(skill.id)}
                 className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-rose-400 transition"
               >
                 <Trash2 className="w-3.5 h-3.5" />

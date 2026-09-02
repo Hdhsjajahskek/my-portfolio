@@ -10,7 +10,7 @@ export const ProfileEditor: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    updateProfile(profile);
+    void updateProfile(profile);
     setSavedMessage(true);
     setTimeout(() => setSavedMessage(false), 3000);
   };

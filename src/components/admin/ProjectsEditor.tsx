@@ -71,9 +71,9 @@ export const ProjectsEditor: React.FC = () => {
     };
 
     if (isCreatingNew) {
-      addProject(projectToSave);
+      void addProject(projectToSave);
     } else {
-      updateProject(projectToSave);
+      void updateProject(projectToSave);
     }
 
     setEditingProject(null);
@@ -82,7 +82,7 @@ export const ProjectsEditor: React.FC = () => {
 
   const handleDelete = (id: string) => {
     if (confirm('Are you sure you want to delete this project?')) {
-      deleteProject(id);
+      void deleteProject(id);
     }
   };
 

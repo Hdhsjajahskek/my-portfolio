@@ -21,7 +21,7 @@ export const SecuritySettingsEditor: React.FC = () => {
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     soundFx.playSuccess();
-    updateSecuritySettings({ hideAdminButton: hideButton });
+    void updateSecuritySettings({ hideAdminButton: hideButton });
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);
   };

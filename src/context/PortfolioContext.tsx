@@ -1,362 +1,384 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { 
-  PortfolioData, 
-  Project, 
-  Service, 
-  Skill, 
-  Testimonial, 
-  ContactMessage, 
-  PortfolioProfile, 
-  ThemeSettings, 
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import {
+  doc,
+  onSnapshot,
+  setDoc,
+  getDoc,
+  collection,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  serverTimestamp,
+  type Unsubscribe,
+} from 'firebase/firestore';
+import { db } from '../lib/firebase';
+import {
+  PortfolioData,
+  Project,
+  Service,
+  Skill,
+  Testimonial,
+  ContactMessage,
+  PortfolioProfile,
+  ThemeSettings,
   RoomTheme,
-  SecuritySettings
+  SecuritySettings,
 } from '../types/portfolio';
 import { initialPortfolioData } from '../data/defaultData';
 import { soundFx } from '../utils/audio';
 
-const STORAGE_KEY = 'aura_portfolio_data_v1';
-const SYNC_CHANNEL_NAME = 'aura_portfolio_sync_channel';
+// ─────────────────────────────────────────────────────────────────
+// Firestore document paths
+// portfolio/data        → main portfolio document (profile, projects, services, etc.)
+// leads/{leadId}        → individual contact messages (subcollection for easy security rules)
+// ─────────────────────────────────────────────────────────────────
+const PORTFOLIO_DOC = 'portfolio/data';
+const LEADS_COLLECTION = 'leads';
+
+// Local cache key — used only for the initial paint before Firestore responds
+const CACHE_KEY = 'aura_portfolio_cache_v2';
+
+// ─── Helpers ─────────────────────────────────────────────────────
+const readCache = (): PortfolioData | null => {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return { ...initialPortfolioData, ...parsed, security: parsed.security ?? initialPortfolioData.security };
+  } catch {
+    return null;
+  }
+};
+
+const writeCache = (data: PortfolioData) => {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify(data));
+  } catch {
+    // quota — not critical
+  }
+};
 
 interface PortfolioContextType {
   data: PortfolioData;
   isLoading: boolean;
+  isSyncing: boolean;
   activeCategory: string;
   setActiveCategory: (cat: string) => void;
   activeProjectModal: Project | null;
   setActiveProjectModal: (proj: Project | null) => void;
   // CMS Mutators
-  updateProfile: (profile: Partial<PortfolioProfile>) => void;
-  addProject: (project: Omit<Project, 'id'>) => void;
-  updateProject: (project: Project) => void;
-  deleteProject: (id: string) => void;
-  addService: (service: Omit<Service, 'id'>) => void;
-  updateService: (service: Service) => void;
-  deleteService: (id: string) => void;
-  addSkill: (skill: Omit<Skill, 'id'>) => void;
-  updateSkill: (skill: Skill) => void;
-  deleteSkill: (id: string) => void;
-  addTestimonial: (test: Omit<Testimonial, 'id'>) => void;
-  deleteTestimonial: (id: string) => void;
+  updateProfile: (profile: Partial<PortfolioProfile>) => Promise<void>;
+  addProject: (project: Omit<Project, 'id'>) => Promise<void>;
+  updateProject: (project: Project) => Promise<void>;
+  deleteProject: (id: string) => Promise<void>;
+  addService: (service: Omit<Service, 'id'>) => Promise<void>;
+  updateService: (service: Service) => Promise<void>;
+  deleteService: (id: string) => Promise<void>;
+  addSkill: (skill: Omit<Skill, 'id'>) => Promise<void>;
+  updateSkill: (skill: Skill) => Promise<void>;
+  deleteSkill: (id: string) => Promise<void>;
+  addTestimonial: (test: Omit<Testimonial, 'id'>) => Promise<void>;
+  deleteTestimonial: (id: string) => Promise<void>;
   submitContactLead: (lead: Omit<ContactMessage, 'id' | 'createdAt' | 'status'>) => Promise<boolean>;
-  updateLeadStatus: (id: string, status: ContactMessage['status']) => void;
-  deleteLead: (id: string) => void;
-  setRoomTheme: (theme: RoomTheme) => void;
-  updateThemeSettings: (theme: Partial<ThemeSettings>) => void;
-  updateSecuritySettings: (security: Partial<SecuritySettings>) => void;
-  toggleSound: () => void;
-  resetToDefaults: () => void;
+  updateLeadStatus: (id: string, status: ContactMessage['status']) => Promise<void>;
+  deleteLead: (id: string) => Promise<void>;
+  setRoomTheme: (theme: RoomTheme) => Promise<void>;
+  updateThemeSettings: (theme: Partial<ThemeSettings>) => Promise<void>;
+  updateSecuritySettings: (security: Partial<SecuritySettings>) => Promise<void>;
+  toggleSound: () => Promise<void>;
+  resetToDefaults: () => Promise<void>;
   exportDataJSON: () => string;
-  importDataJSON: (json: string) => boolean;
+  importDataJSON: (json: string) => Promise<boolean>;
 }
 
 const PortfolioContext = createContext<PortfolioContextType | undefined>(undefined);
 
 export const PortfolioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [data, setData] = useState<PortfolioData>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return {
-          ...initialPortfolioData,
-          ...parsed,
-          security: parsed.security || initialPortfolioData.security
-        };
-      }
-    } catch {
-      // fallback
-    }
-    return initialPortfolioData;
-  });
-
+  // Initialise from local cache for instant paint; Firestore will override within ~200ms
+  const [data, setData] = useState<PortfolioData>(() => readCache() ?? initialPortfolioData);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [activeCategory, setActiveCategory] = useState<string>('All');
   const [activeProjectModal, setActiveProjectModal] = useState<Project | null>(null);
+  const dataRef = useRef(data); // kept up-to-date to avoid stale closures in mutators
+  dataRef.current = data;
 
-  // Broadcast channel for instantaneous cross-tab live synchronization
-  const broadcastSync = useCallback((newData: PortfolioData) => {
-    try {
-      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-        const channel = new BroadcastChannel(SYNC_CHANNEL_NAME);
-        channel.postMessage({ type: 'PORTFOLIO_UPDATE', payload: newData });
-        channel.close();
-      }
-    } catch {
-      // Ignore broadcast errors
-    }
-  }, []);
-
-  // Save to localStorage & broadcast whenever data changes
-  const persistAndBroadcast = useCallback((newData: PortfolioData) => {
-    setData(newData);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newData));
-    } catch {
-      // quota handling
-    }
-    broadcastSync(newData);
-  }, [broadcastSync]);
-
-  // Listen to external changes from other tabs / windows
+  // ─── 1. Subscribe to Firestore real-time updates ──────────────
   useEffect(() => {
-    let channel: BroadcastChannel | null = null;
+    const portfolioDocRef = doc(db, PORTFOLIO_DOC);
+    let loaderTimer: ReturnType<typeof setTimeout>;
 
-    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-      channel = new BroadcastChannel(SYNC_CHANNEL_NAME);
-      channel.onmessage = (event) => {
-        if (event.data?.type === 'PORTFOLIO_UPDATE' && event.data.payload) {
-          setData(event.data.payload);
+    const unsub: Unsubscribe = onSnapshot(
+      portfolioDocRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const remote = snapshot.data() as PortfolioData;
+          const merged: PortfolioData = {
+            ...initialPortfolioData,
+            ...remote,
+            security: remote.security ?? initialPortfolioData.security,
+          };
+          setData(merged);
+          writeCache(merged);
+        } else {
+          // First ever launch — no data in Firestore yet. Seed it.
+          setDoc(portfolioDocRef, initialPortfolioData).catch(console.error);
         }
-      };
-    }
-
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY && e.newValue) {
-        try {
-          setData(JSON.parse(e.newValue));
-        } catch {
-          // ignore
-        }
+        // Stop the loader as soon as we have a Firestore response
+        clearTimeout(loaderTimer);
+        setIsLoading(false);
+      },
+      (err) => {
+        // Permission denied or offline — fall back to cache / default
+        console.warn('[Firestore] onSnapshot error:', err.code, err.message);
+        clearTimeout(loaderTimer);
+        setIsLoading(false);
       }
-    };
+    );
 
-    window.addEventListener('storage', handleStorage);
-
-    // Initial loader timeout
-    const timer = setTimeout(() => {
-      setIsLoading(false);
-    }, 1200);
+    // Safety fallback: if Firestore takes > 4s (e.g., offline), stop showing the loader
+    loaderTimer = setTimeout(() => setIsLoading(false), 4000);
 
     return () => {
-      clearTimeout(timer);
-      if (channel) channel.close();
-      window.removeEventListener('storage', handleStorage);
+      unsub();
+      clearTimeout(loaderTimer);
     };
   }, []);
 
-  // Sync sound engine preference
+  // ─── 2. Sync sound engine preference ────────────────────────
   useEffect(() => {
     soundFx.setEnabled(data.theme.soundEnabled);
   }, [data.theme.soundEnabled]);
 
-  // --- Mutators ---
+  // ─── 3. Core write helper ─────────────────────────────────────
+  // All admin mutations call this single function which writes to Firestore.
+  // Firestore's onSnapshot will then push the update back to ALL connected clients.
+  const saveToFirestore = useCallback(async (newData: PortfolioData) => {
+    setIsSyncing(true);
+    try {
+      await setDoc(doc(db, PORTFOLIO_DOC), newData);
+      // setData is intentionally NOT called here — the onSnapshot listener above
+      // will receive the update from Firestore and call setData for us.
+    } catch (err) {
+      console.error('[Firestore] Write failed:', err);
+      // Optimistic local update so the UI doesn't feel broken
+      setData(newData);
+      writeCache(newData);
+    } finally {
+      setIsSyncing(false);
+    }
+  }, []);
 
-  const updateProfile = (profileUpdate: Partial<PortfolioProfile>) => {
+  // ─── 4. Mutators ─────────────────────────────────────────────
+
+  const updateProfile = async (profileUpdate: Partial<PortfolioProfile>) => {
     const updated: PortfolioData = {
-      ...data,
-      profile: { ...data.profile, ...profileUpdate }
+      ...dataRef.current,
+      profile: { ...dataRef.current.profile, ...profileUpdate },
     };
-    persistAndBroadcast(updated);
+    await saveToFirestore(updated);
     soundFx.playSuccess();
   };
 
-  const addProject = (project: Omit<Project, 'id'>) => {
-    const newProj: Project = {
-      ...project,
-      id: 'proj-' + Date.now()
-    };
+  const addProject = async (project: Omit<Project, 'id'>) => {
+    const newProj: Project = { ...project, id: 'proj-' + Date.now() };
     const updated: PortfolioData = {
-      ...data,
-      projects: [newProj, ...data.projects]
+      ...dataRef.current,
+      projects: [newProj, ...dataRef.current.projects],
     };
-    persistAndBroadcast(updated);
+    await saveToFirestore(updated);
     soundFx.playSuccess();
   };
 
-  const updateProject = (project: Project) => {
+  const updateProject = async (project: Project) => {
     const updated: PortfolioData = {
-      ...data,
-      projects: data.projects.map(p => p.id === project.id ? project : p)
+      ...dataRef.current,
+      projects: dataRef.current.projects.map(p => p.id === project.id ? project : p),
     };
-    persistAndBroadcast(updated);
+    await saveToFirestore(updated);
     soundFx.playSuccess();
   };
 
-  const deleteProject = (id: string) => {
+  const deleteProject = async (id: string) => {
     const updated: PortfolioData = {
-      ...data,
-      projects: data.projects.filter(p => p.id !== id)
+      ...dataRef.current,
+      projects: dataRef.current.projects.filter(p => p.id !== id),
     };
-    persistAndBroadcast(updated);
+    await saveToFirestore(updated);
     soundFx.playClick();
   };
 
-  const addService = (service: Omit<Service, 'id'>) => {
-    const newService: Service = {
-      ...service,
-      id: 'srv-' + Date.now()
-    };
+  const addService = async (service: Omit<Service, 'id'>) => {
+    const newService: Service = { ...service, id: 'srv-' + Date.now() };
     const updated: PortfolioData = {
-      ...data,
-      services: [...data.services, newService]
+      ...dataRef.current,
+      services: [...dataRef.current.services, newService],
     };
-    persistAndBroadcast(updated);
+    await saveToFirestore(updated);
     soundFx.playSuccess();
   };
 
-  const updateService = (service: Service) => {
+  const updateService = async (service: Service) => {
     const updated: PortfolioData = {
-      ...data,
-      services: data.services.map(s => s.id === service.id ? service : s)
+      ...dataRef.current,
+      services: dataRef.current.services.map(s => s.id === service.id ? service : s),
     };
-    persistAndBroadcast(updated);
+    await saveToFirestore(updated);
     soundFx.playSuccess();
   };
 
-  const deleteService = (id: string) => {
+  const deleteService = async (id: string) => {
     const updated: PortfolioData = {
-      ...data,
-      services: data.services.filter(s => s.id !== id)
+      ...dataRef.current,
+      services: dataRef.current.services.filter(s => s.id !== id),
     };
-    persistAndBroadcast(updated);
+    await saveToFirestore(updated);
     soundFx.playClick();
   };
 
-  const addSkill = (skill: Omit<Skill, 'id'>) => {
-    const newSkill: Skill = {
-      ...skill,
-      id: 'sk-' + Date.now()
-    };
+  const addSkill = async (skill: Omit<Skill, 'id'>) => {
+    const newSkill: Skill = { ...skill, id: 'sk-' + Date.now() };
     const updated: PortfolioData = {
-      ...data,
-      skills: [...data.skills, newSkill]
+      ...dataRef.current,
+      skills: [...dataRef.current.skills, newSkill],
     };
-    persistAndBroadcast(updated);
+    await saveToFirestore(updated);
     soundFx.playSuccess();
   };
 
-  const updateSkill = (skill: Skill) => {
+  const updateSkill = async (skill: Skill) => {
     const updated: PortfolioData = {
-      ...data,
-      skills: data.skills.map(s => s.id === skill.id ? skill : s)
+      ...dataRef.current,
+      skills: dataRef.current.skills.map(s => s.id === skill.id ? skill : s),
     };
-    persistAndBroadcast(updated);
+    await saveToFirestore(updated);
     soundFx.playSuccess();
   };
 
-  const deleteSkill = (id: string) => {
+  const deleteSkill = async (id: string) => {
     const updated: PortfolioData = {
-      ...data,
-      skills: data.skills.filter(s => s.id !== id)
+      ...dataRef.current,
+      skills: dataRef.current.skills.filter(s => s.id !== id),
     };
-    persistAndBroadcast(updated);
+    await saveToFirestore(updated);
     soundFx.playClick();
   };
 
-  const addTestimonial = (test: Omit<Testimonial, 'id'>) => {
-    const newTest: Testimonial = {
-      ...test,
-      id: 'test-' + Date.now()
-    };
+  const addTestimonial = async (test: Omit<Testimonial, 'id'>) => {
+    const newTest: Testimonial = { ...test, id: 'test-' + Date.now() };
     const updated: PortfolioData = {
-      ...data,
-      testimonials: [...data.testimonials, newTest]
+      ...dataRef.current,
+      testimonials: [...dataRef.current.testimonials, newTest],
     };
-    persistAndBroadcast(updated);
+    await saveToFirestore(updated);
     soundFx.playSuccess();
   };
 
-  const deleteTestimonial = (id: string) => {
+  const deleteTestimonial = async (id: string) => {
     const updated: PortfolioData = {
-      ...data,
-      testimonials: data.testimonials.filter(t => t.id !== id)
+      ...dataRef.current,
+      testimonials: dataRef.current.testimonials.filter(t => t.id !== id),
     };
-    persistAndBroadcast(updated);
+    await saveToFirestore(updated);
     soundFx.playClick();
   };
 
-  const submitContactLead = async (leadData: Omit<ContactMessage, 'id' | 'createdAt' | 'status'>): Promise<boolean> => {
-    const newLead: ContactMessage = {
-      ...leadData,
-      id: 'lead-' + Date.now(),
-      createdAt: new Date().toISOString(),
-      status: 'new'
-    };
-    const updated: PortfolioData = {
-      ...data,
-      leads: [newLead, ...(data.leads || [])]
-    };
-    persistAndBroadcast(updated);
-    soundFx.playSuccess();
-    return true;
+  // ─── Contact Leads — stored in separate Firestore collection ──
+  // Visitors can add leads (Firestore rules: create only, no read/delete)
+  // Admin can read and manage all leads
+  const submitContactLead = async (
+    leadData: Omit<ContactMessage, 'id' | 'createdAt' | 'status'>
+  ): Promise<boolean> => {
+    try {
+      await addDoc(collection(db, LEADS_COLLECTION), {
+        ...leadData,
+        createdAt: serverTimestamp(),
+        status: 'new',
+      });
+      soundFx.playSuccess();
+      return true;
+    } catch (err) {
+      console.error('[Firestore] Failed to submit lead:', err);
+      return false;
+    }
   };
 
-  const updateLeadStatus = (id: string, status: ContactMessage['status']) => {
-    const updated: PortfolioData = {
-      ...data,
-      leads: (data.leads || []).map(l => l.id === id ? { ...l, status } : l)
-    };
-    persistAndBroadcast(updated);
+  const updateLeadStatus = async (id: string, status: ContactMessage['status']) => {
+    try {
+      await updateDoc(doc(db, LEADS_COLLECTION, id), { status });
+    } catch (err) {
+      console.error('[Firestore] Failed to update lead status:', err);
+    }
   };
 
-  const deleteLead = (id: string) => {
-    const updated: PortfolioData = {
-      ...data,
-      leads: (data.leads || []).filter(l => l.id !== id)
-    };
-    persistAndBroadcast(updated);
-    soundFx.playClick();
+  const deleteLead = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, LEADS_COLLECTION, id));
+      soundFx.playClick();
+    } catch (err) {
+      console.error('[Firestore] Failed to delete lead:', err);
+    }
   };
 
-  const setRoomTheme = (roomTheme: RoomTheme) => {
+  const setRoomTheme = async (roomTheme: RoomTheme) => {
     const updated: PortfolioData = {
-      ...data,
-      theme: { ...data.theme, roomTheme }
+      ...dataRef.current,
+      theme: { ...dataRef.current.theme, roomTheme },
     };
-    persistAndBroadcast(updated);
+    await saveToFirestore(updated);
     soundFx.playWarp();
   };
 
-  const updateThemeSettings = (themeUpdate: Partial<ThemeSettings>) => {
+  const updateThemeSettings = async (themeUpdate: Partial<ThemeSettings>) => {
     const updated: PortfolioData = {
-      ...data,
-      theme: { ...data.theme, ...themeUpdate }
+      ...dataRef.current,
+      theme: { ...dataRef.current.theme, ...themeUpdate },
     };
-    persistAndBroadcast(updated);
+    await saveToFirestore(updated);
     soundFx.playClick();
   };
 
-  const updateSecuritySettings = (secUpdate: Partial<SecuritySettings>) => {
+  const updateSecuritySettings = async (secUpdate: Partial<SecuritySettings>) => {
     const updated: PortfolioData = {
-      ...data,
+      ...dataRef.current,
       security: {
-        // Only persist non-sensitive setting (hideAdminButton).
-        // Email and PIN are env vars — never stored here.
-        hideAdminButton: secUpdate.hideAdminButton ?? data.security?.hideAdminButton ?? false
-      }
+        hideAdminButton: secUpdate.hideAdminButton ?? dataRef.current.security?.hideAdminButton ?? false,
+      },
     };
-    persistAndBroadcast(updated);
+    await saveToFirestore(updated);
     soundFx.playSuccess();
   };
 
-  const toggleSound = () => {
-    const newEnabled = !data.theme.soundEnabled;
-    updateThemeSettings({ soundEnabled: newEnabled });
+  const toggleSound = async () => {
+    const newEnabled = !dataRef.current.theme.soundEnabled;
+    const updated: PortfolioData = {
+      ...dataRef.current,
+      theme: { ...dataRef.current.theme, soundEnabled: newEnabled },
+    };
+    await saveToFirestore(updated);
     if (newEnabled) {
       soundFx.setEnabled(true);
       soundFx.playClick();
     }
   };
 
-  const resetToDefaults = () => {
-    persistAndBroadcast(initialPortfolioData);
+  const resetToDefaults = async () => {
+    await saveToFirestore(initialPortfolioData);
     soundFx.playSuccess();
   };
 
-  const exportDataJSON = () => {
-    return JSON.stringify(data, null, 2);
-  };
+  const exportDataJSON = () => JSON.stringify(dataRef.current, null, 2);
 
-  const importDataJSON = (json: string): boolean => {
+  const importDataJSON = async (json: string): Promise<boolean> => {
     try {
       const parsed = JSON.parse(json);
       if (parsed.profile && parsed.projects && parsed.services) {
-        persistAndBroadcast(parsed);
+        await saveToFirestore(parsed);
         soundFx.playSuccess();
         return true;
       }
     } catch {
-      // error
+      // invalid json
     }
     return false;
   };
@@ -366,6 +388,7 @@ export const PortfolioProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       value={{
         data,
         isLoading,
+        isSyncing,
         activeCategory,
         setActiveCategory,
         activeProjectModal,
@@ -391,7 +414,7 @@ export const PortfolioProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         toggleSound,
         resetToDefaults,
         exportDataJSON,
-        importDataJSON
+        importDataJSON,
       }}
     >
       {children}

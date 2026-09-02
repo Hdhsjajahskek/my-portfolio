@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─────────────────────────────────────────────────────────────
+    // PORTFOLIO DATA — the main site content document
+    // Path: portfolio/data
+    // ─────────────────────────────────────────────────────────────
+    match /portfolio/{document=**} {
+      // Anyone can read (public portfolio website)
+      allow read: if true;
+
+      // Only the verified admin Google account can write
+      allow write: if request.auth != null
+                   && request.auth.token.email == "bhchaudharyjatt@gmail.com"
+                   && request.auth.token.email_verified == true;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // CONTACT LEADS — messages from the contact form
+    // Path: leads/{leadId}
+    // ─────────────────────────────────────────────────────────────
+    match /leads/{leadId} {
+      // Anyone (even unauthenticated visitors) can CREATE a lead
+      // but they cannot read, update, or delete any leads.
+      allow create: if request.resource.data.keys().hasAll(['name', 'email', 'message'])
+                    && request.resource.data.name is string
+                    && request.resource.data.email is string
+                    && request.resource.data.message is string
+                    && request.resource.data.name.size() > 0
+                    && request.resource.data.email.size() > 0
+                    && request.resource.data.message.size() > 0;
+
+      // Only the admin can read, update (status change), or delete leads
+      allow read, update, delete: if request.auth != null
+                                  && request.auth.token.email == "bhchaudharyjatt@gmail.com"
+                                  && request.auth.token.email_verified == true;
+    }
+
+  }
+}

@@ -1,26 +1,84 @@
-import React, { useState } from 'react';
-import { 
-  Inbox, 
-  Mail, 
-  Trash2, 
-  CheckCircle2, 
-  Clock, 
-  DollarSign, 
-  ExternalLink, 
+import React, { useState, useEffect } from 'react';
+import {
+  collection,
+  onSnapshot,
+  query,
+  orderBy,
+  type Unsubscribe,
+} from 'firebase/firestore';
+import {
+  Inbox,
+  Mail,
+  Trash2,
   Download,
-  Filter
+  Loader2,
+  WifiOff,
 } from 'lucide-react';
+import { db } from '../../lib/firebase';
 import { usePortfolio } from '../../context/PortfolioContext';
 import { ContactMessage } from '../../types/portfolio';
 import { soundFx } from '../../utils/audio';
 
+const LEADS_COLLECTION = 'leads';
+
 export const LeadsInbox: React.FC = () => {
-  const { data, updateLeadStatus, deleteLead } = usePortfolio();
+  const { updateLeadStatus, deleteLead } = usePortfolio();
+  const [leads, setLeads] = useState<ContactMessage[]>([]);
+  const [isLoadingLeads, setIsLoadingLeads] = useState(true);
+  const [leadsError, setLeadsError] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>('all');
 
-  const leads = data.leads || [];
+  // ── Real-time Firestore subscription to the leads collection ──
+  useEffect(() => {
+    setIsLoadingLeads(true);
+    setLeadsError(null);
 
-  const filteredLeads = leads.filter(l => {
+    let unsub: Unsubscribe | undefined;
+
+    try {
+      const q = query(collection(db, LEADS_COLLECTION), orderBy('createdAt', 'desc'));
+      unsub = onSnapshot(
+        q,
+        (snapshot) => {
+          const fetched: ContactMessage[] = snapshot.docs.map((d) => {
+            const raw = d.data();
+            return {
+              id: d.id,
+              name: raw.name ?? '',
+              email: raw.email ?? '',
+              serviceInterest: raw.serviceInterest,
+              budget: raw.budget,
+              message: raw.message ?? '',
+              // Firestore Timestamp → ISO string
+              createdAt: raw.createdAt?.toDate?.()?.toISOString?.() ?? new Date().toISOString(),
+              status: raw.status ?? 'new',
+            } as ContactMessage;
+          });
+          setLeads(fetched);
+          setIsLoadingLeads(false);
+          setLeadsError(null);
+        },
+        (err) => {
+          console.error('[LeadsInbox] onSnapshot error:', err);
+          setLeadsError(
+            err.code === 'permission-denied'
+              ? 'Access denied — make sure you are logged in as the admin.'
+              : 'Failed to load messages. Check your connection.'
+          );
+          setIsLoadingLeads(false);
+        }
+      );
+    } catch (err) {
+      setLeadsError('Could not connect to database.');
+      setIsLoadingLeads(false);
+    }
+
+    return () => {
+      if (unsub) unsub();
+    };
+  }, []);
+
+  const filteredLeads = leads.filter((l) => {
     if (filterStatus === 'all') return true;
     return l.status === filterStatus;
   });
@@ -28,7 +86,7 @@ export const LeadsInbox: React.FC = () => {
   const exportCSV = () => {
     soundFx.playClick();
     const headers = ['ID', 'Date', 'Name', 'Email', 'Service', 'Budget', 'Status', 'Message'];
-    const rows = leads.map(l => [
+    const rows = leads.map((l) => [
       l.id,
       new Date(l.createdAt).toLocaleString(),
       `"${l.name.replace(/"/g, '""')}"`,
@@ -36,10 +94,12 @@ export const LeadsInbox: React.FC = () => {
       `"${(l.serviceInterest || '').replace(/"/g, '""')}"`,
       `"${l.budget || ''}"`,
       l.status,
-      `"${l.message.replace(/"/g, '""')}"`
+      `"${l.message.replace(/"/g, '""')}"`,
     ]);
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    const csvContent =
+      'data:text/csv;charset=utf-8,' +
+      [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
@@ -49,18 +109,43 @@ export const LeadsInbox: React.FC = () => {
     document.body.removeChild(link);
   };
 
+  // ── Loading state ──────────────────────────────────────────────
+  if (isLoadingLeads) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 space-y-3">
+        <Loader2 className="w-8 h-8 text-cyan-400 animate-spin" />
+        <p className="text-sm text-slate-400 font-mono">Connecting to leads database…</p>
+      </div>
+    );
+  }
+
+  // ── Error state ────────────────────────────────────────────────
+  if (leadsError) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 space-y-3 text-center px-6">
+        <WifiOff className="w-10 h-10 text-rose-400" />
+        <p className="text-sm font-bold text-rose-300">{leadsError}</p>
+        <p className="text-xs text-slate-500 font-mono">Check your Firestore security rules and internet connection.</p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
         <div>
           <div className="flex items-center gap-2">
-            <h3 className="text-lg font-bold font-heading text-white">Client Inquiries & Leads Inbox</h3>
+            <h3 className="text-lg font-bold font-heading text-white">Client Inquiries &amp; Leads Inbox</h3>
             <span className="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 text-xs font-mono font-bold">
               {leads.length} TOTAL
             </span>
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] font-mono border border-emerald-500/30">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
+              LIVE
+            </span>
           </div>
-          <p className="text-xs text-slate-400">Live stream of client inquiries received from the terminal form.</p>
+          <p className="text-xs text-slate-400">Real-time stream from Firestore — updates the instant a message arrives.</p>
         </div>
 
         <button
@@ -73,8 +158,8 @@ export const LeadsInbox: React.FC = () => {
       </div>
 
       {/* Filter Tabs */}
-      <div className="flex items-center gap-2">
-        {['all', 'new', 'in_review', 'contacted', 'archived'].map(st => (
+      <div className="flex flex-wrap items-center gap-2">
+        {['all', 'new', 'in_review', 'contacted', 'archived'].map((st) => (
           <button
             key={st}
             onClick={() => {
@@ -122,7 +207,7 @@ export const LeadsInbox: React.FC = () => {
                   {/* Status Dropdown */}
                   <select
                     value={lead.status}
-                    onChange={(e) => updateLeadStatus(lead.id, e.target.value as any)}
+                    onChange={(e) => updateLeadStatus(lead.id, e.target.value as ContactMessage['status'])}
                     className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs font-mono text-slate-300 focus:border-cyan-400"
                   >
                     <option value="new">🟢 New</option>

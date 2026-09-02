@@ -68,19 +68,20 @@ export const ThemeSettingsEditor: React.FC = () => {
 
   const handleImport = () => {
     if (!importJsonText) return;
-    const ok = importDataJSON(importJsonText);
-    if (ok) {
-      setImportStatus('success');
-      setImportJsonText('');
-      setTimeout(() => setImportStatus(null), 3000);
-    } else {
-      setImportStatus('error');
-    }
+    void importDataJSON(importJsonText).then((ok) => {
+      if (ok) {
+        setImportStatus('success');
+        setImportJsonText('');
+        setTimeout(() => setImportStatus(null), 3000);
+      } else {
+        setImportStatus('error');
+      }
+    });
   };
 
   const handleReset = () => {
     if (confirm('Are you sure you want to reset all portfolio data back to default presets? Custom edits will be overwritten.')) {
-      resetToDefaults();
+      void resetToDefaults();
     }
   };
 
@@ -103,7 +104,7 @@ export const ThemeSettingsEditor: React.FC = () => {
           {themeOptions.map((t) => (
             <div
               key={t.id}
-              onClick={() => setRoomTheme(t.id)}
+              onClick={() => void setRoomTheme(t.id)}
               className={`p-4 rounded-2xl border cursor-pointer flex items-start gap-3.5 transition ${
                 data.theme.roomTheme === t.id
                   ? 'bg-cyan-500/10 border-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.2)]'
@@ -138,7 +139,7 @@ export const ThemeSettingsEditor: React.FC = () => {
         </div>
 
         <button
-          onClick={toggleSound}
+          onClick={() => void toggleSound()}
           className={`px-4 py-2 rounded-xl text-xs font-mono font-bold uppercase transition ${
             data.theme.soundEnabled
               ? 'bg-cyan-500 text-slate-950 shadow-[0_0_15px_rgba(6,182,212,0.4)]'

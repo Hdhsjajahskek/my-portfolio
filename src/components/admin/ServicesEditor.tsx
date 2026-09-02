@@ -67,9 +67,9 @@ export const ServicesEditor: React.FC = () => {
     };
 
     if (isCreatingNew) {
-      addService(serviceToSave);
+      void addService(serviceToSave);
     } else {
-      updateService(serviceToSave);
+      void updateService(serviceToSave);
     }
 
     setEditingService(null);
@@ -78,7 +78,7 @@ export const ServicesEditor: React.FC = () => {
 
   const handleDelete = (id: string) => {
     if (confirm('Are you sure you want to delete this service tier?')) {
-      deleteService(id);
+      void deleteService(id);
     }
   };
 
