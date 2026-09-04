@@ -16,13 +16,16 @@ import { soundFx } from '../utils/audio';
 const AUTHORIZED_EMAIL = (import.meta.env.VITE_ADMIN_EMAIL as string | undefined)?.trim().toLowerCase() ?? '';
 const ADMIN_PIN = (import.meta.env.VITE_ADMIN_PIN as string | undefined)?.trim() ?? '';
 
+export interface GoogleLoginResult {
+  status: 'email_ok' | 'unauthorized_email' | 'error';
+  errorMessage?: string;
+}
+
 interface AuthContextType {
   user: AdminUser | null;
   isAuthenticated: boolean;
-  /** Step 1: Opens the real Google sign-in popup and checks email.
-   *  Returns 'email_ok' if Google auth passed and email is authorized,
-   *  'unauthorized_email' if wrong account, or 'error' on failure. */
-  startGoogleLogin: () => Promise<'email_ok' | 'unauthorized_email' | 'error'>;
+  /** Step 1: Opens the real Google sign-in popup and checks email. */
+  startGoogleLogin: () => Promise<GoogleLoginResult>;
   /** Step 2: Called after Google auth succeeds — validates the owner PIN.
    *  Returns true if PIN matches the env var, false otherwise. */
   verifyPin: (pin: string) => boolean;
@@ -75,18 +78,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [user]);
 
   // ─── Step 1: Real Google sign-in popup ──────────────────────────
-  const startGoogleLogin = async (): Promise<'email_ok' | 'unauthorized_email' | 'error'> => {
+  const startGoogleLogin = async (): Promise<GoogleLoginResult> => {
     soundFx.playClick();
 
     if (!isFirebaseConfigured) {
       console.error('[Auth] Firebase is not configured. Add environment variables in Vercel.');
-      alert('Firebase environment variables are not configured in Vercel. Please add them in Vercel Settings > Environment Variables.');
-      return 'error';
+      return {
+        status: 'error',
+        errorMessage: 'Firebase environment variables are not configured in Vercel. Please add them in Vercel Settings > Environment Variables.',
+      };
     }
 
     if (!AUTHORIZED_EMAIL) {
-      console.error('[Auth] VITE_ADMIN_EMAIL is not set. Check your .env.local file.');
-      return 'error';
+      console.error('[Auth] VITE_ADMIN_EMAIL is not set.');
+      return {
+        status: 'error',
+        errorMessage: 'VITE_ADMIN_EMAIL is not set in environment variables.',
+      };
     }
 
     try {
@@ -98,19 +106,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Wrong Google account — sign them out immediately
         await signOut(auth);
         soundFx.playClick();
-        return 'unauthorized_email';
+        return { status: 'unauthorized_email' };
       }
 
       // Email matches — hold the Firebase user and wait for PIN
       setPendingFirebaseUser(firebaseUser);
-      return 'email_ok';
+      return { status: 'email_ok' };
     } catch (err: unknown) {
-      // User closed popup or network error — not a security failure
-      const code = (err as { code?: string })?.code;
-      if (code !== 'auth/popup-closed-by-user' && code !== 'auth/cancelled-popup-request') {
-        console.error('[Auth] Google sign-in error:', err);
+      const authErr = err as { code?: string; message?: string };
+      const code = authErr?.code;
+      console.error('[Auth] Google sign-in error:', err);
+
+      let errorMessage = 'Sign-in was cancelled or failed. Please try again.';
+
+      if (code === 'auth/unauthorized-domain') {
+        const currentDomain = window.location.hostname;
+        errorMessage = `Domain "${currentDomain}" is not authorized in Firebase! Go to Firebase Console > Authentication > Settings > Authorized domains and add "${currentDomain}".`;
+      } else if (code === 'auth/operation-not-allowed') {
+        errorMessage = 'Google Sign-in is not enabled in Firebase Console. Go to Firebase Console > Authentication > Sign-in method and enable Google.';
+      } else if (code === 'auth/popup-blocked') {
+        errorMessage = 'Sign-in popup was blocked by your browser. Please allow popups for this site.';
+      } else if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+        errorMessage = 'Sign-in popup was closed before completing.';
+      } else if (authErr?.message) {
+        errorMessage = authErr.message;
       }
-      return 'error';
+
+      return { status: 'error', errorMessage };
     }
   };
 

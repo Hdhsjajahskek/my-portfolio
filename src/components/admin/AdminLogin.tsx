@@ -34,14 +34,14 @@ export const AdminLogin: React.FC = () => {
     const result = await startGoogleLogin();
     setLoading(false);
 
-    if (result === 'email_ok') {
+    if (result.status === 'email_ok') {
       // Google verified — move to PIN step
       setStep('pin');
-    } else if (result === 'unauthorized_email') {
+    } else if (result.status === 'unauthorized_email') {
       setStep('error_email');
     } else {
-      // Popup closed or network error — stay on google step
-      setAuthError('Sign-in was cancelled or failed. Please try again.');
+      // Popup closed, domain not authorized, or network error
+      setAuthError(result.errorMessage || 'Sign-in was cancelled or failed. Please try again.');
     }
   };
 
