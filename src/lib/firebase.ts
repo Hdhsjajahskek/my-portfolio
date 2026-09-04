@@ -9,6 +9,8 @@ export const isFirebaseConfigured = Boolean(
   apiKey && projectId && apiKey !== 'undefined' && apiKey.trim() !== ''
 );
 
+console.log('[Firebase Status] Configured:', isFirebaseConfigured, '| API Key Present:', Boolean(apiKey));
+
 // All values come from environment variables — never hardcoded.
 // Set these in .env.local (gitignored) for local dev, and in your
 // hosting provider's environment settings (Vercel/Netlify) for production.
