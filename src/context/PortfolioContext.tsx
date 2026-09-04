@@ -11,7 +11,7 @@ import {
   serverTimestamp,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, isFirebaseConfigured } from '../lib/firebase';
 import {
   PortfolioData,
   Project,
@@ -105,6 +105,12 @@ export const PortfolioProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   // ─── 1. Subscribe to Firestore real-time updates ──────────────
   useEffect(() => {
+    if (!isFirebaseConfigured) {
+      // Running without Firebase env vars — keep initial/cached data and unblock loading
+      setIsLoading(false);
+      return;
+    }
+
     const portfolioDocRef = doc(db, PORTFOLIO_DOC);
     let loaderTimer: ReturnType<typeof setTimeout>;
 
@@ -155,6 +161,12 @@ export const PortfolioProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   // Firestore's onSnapshot will then push the update back to ALL connected clients.
   const saveToFirestore = useCallback(async (newData: PortfolioData) => {
     setIsSyncing(true);
+    if (!isFirebaseConfigured) {
+      setData(newData);
+      writeCache(newData);
+      setIsSyncing(false);
+      return;
+    }
     try {
       await setDoc(doc(db, PORTFOLIO_DOC), newData);
       // setData is intentionally NOT called here — the onSnapshot listener above
@@ -289,6 +301,11 @@ export const PortfolioProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const submitContactLead = async (
     leadData: Omit<ContactMessage, 'id' | 'createdAt' | 'status'>
   ): Promise<boolean> => {
+    if (!isFirebaseConfigured) {
+      console.warn('[Contact] Firebase is not configured — message accepted in demo mode.');
+      soundFx.playSuccess();
+      return true;
+    }
     try {
       await addDoc(collection(db, LEADS_COLLECTION), {
         ...leadData,

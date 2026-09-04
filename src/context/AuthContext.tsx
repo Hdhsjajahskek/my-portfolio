@@ -5,7 +5,7 @@ import {
   onAuthStateChanged,
   type User as FirebaseUser
 } from 'firebase/auth';
-import { auth, googleProvider } from '../lib/firebase';
+import { auth, googleProvider, isFirebaseConfigured } from '../lib/firebase';
 import { AdminUser } from '../types/portfolio';
 import { soundFx } from '../utils/audio';
 
@@ -64,6 +64,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Listen for Firebase auth state changes (handles page refresh)
   // If Firebase loses the session, clear our admin user too.
   useEffect(() => {
+    if (!isFirebaseConfigured) return;
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       if (!firebaseUser && user) {
         // Firebase session ended — clear admin state
@@ -76,6 +77,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // ─── Step 1: Real Google sign-in popup ──────────────────────────
   const startGoogleLogin = async (): Promise<'email_ok' | 'unauthorized_email' | 'error'> => {
     soundFx.playClick();
+
+    if (!isFirebaseConfigured) {
+      console.error('[Auth] Firebase is not configured. Add environment variables in Vercel.');
+      alert('Firebase environment variables are not configured in Vercel. Please add them in Vercel Settings > Environment Variables.');
+      return 'error';
+    }
 
     if (!AUTHORIZED_EMAIL) {
       console.error('[Auth] VITE_ADMIN_EMAIL is not set. Check your .env.local file.');

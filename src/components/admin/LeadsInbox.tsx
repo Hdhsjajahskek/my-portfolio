@@ -14,7 +14,7 @@ import {
   Loader2,
   WifiOff,
 } from 'lucide-react';
-import { db } from '../../lib/firebase';
+import { db, isFirebaseConfigured } from '../../lib/firebase';
 import { usePortfolio } from '../../context/PortfolioContext';
 import { ContactMessage } from '../../types/portfolio';
 import { soundFx } from '../../utils/audio';
@@ -30,6 +30,11 @@ export const LeadsInbox: React.FC = () => {
 
   // ── Real-time Firestore subscription to the leads collection ──
   useEffect(() => {
+    if (!isFirebaseConfigured) {
+      setIsLoadingLeads(false);
+      return;
+    }
+
     setIsLoadingLeads(true);
     setLeadsError(null);
 
